@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: fbi
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fbi}
+      POSTGRES_DB: fbi
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U fbi"], interval: 5s, retries: 10 }
+
+  redis:
+    image: redis:7-alpine
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, retries: 10 }
+
+  api:
+    build: ./backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://fbi:${POSTGRES_PASSWORD:-fbi}@db:5432/fbi
+      REDIS_URL: redis://redis:6379/0
+      TASK_BACKEND: celery
+      CORS_ORIGINS: http://localhost:3000
+    depends_on: { db: { condition: service_healthy }, redis: { condition: service_healthy } }
+    ports: ["8000:8000"]
+
+  worker:
+    build: ./backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://fbi:${POSTGRES_PASSWORD:-fbi}@db:5432/fbi
+      REDIS_URL: redis://redis:6379/0
+      TASK_BACKEND: celery
+    command: celery -A app.worker.celery_app worker --beat --loglevel=INFO --concurrency=2
+    depends_on: { api: { condition: service_started } }
+
+  web:
+    build: { context: ./frontend, args: { BACKEND_URL: "http://api:8000" } }
+    environment: { BACKEND_URL: "http://api:8000" }
+    depends_on: [api]
+    ports: ["3000:3000"]
+
+volumes:
+  pgdata:
